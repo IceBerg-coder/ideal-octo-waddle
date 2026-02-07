@@ -1,0 +1,21 @@
+extern def print_int(val: int)
+
+def check_bool(flag: bool)
+    if flag
+        print_int(1)
+    else
+        print_int(0)
+    end
+end
+
+def main()
+    var t: bool = true
+    var f: bool = false
+    
+    check_bool(t)
+    check_bool(f)
+    
+    # Test expression result
+    var result: bool = 10 > 5
+    check_bool(result)
+end

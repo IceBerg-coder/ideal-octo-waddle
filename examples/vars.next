@@ -1,0 +1,14 @@
+extern def print_int(val: int)
+
+def main()
+    var x: int = 10
+    var y: int = 20
+    var z = x + y
+    print_int(z)
+    
+    var i: int = 0
+    while i < 3
+        print_int(i)
+        i = i + 1
+    end
+end

@@ -1,0 +1,7 @@
+extern def print_int(val: int)
+extern def print_string(val: string)
+
+def main()
+    print_string("Hello, World!")
+    print_int(42)
+end

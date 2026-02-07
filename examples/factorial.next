@@ -1,0 +1,12 @@
+extern def print_int(val: int)
+
+def factorial(n: int) -> int
+    if n < 2
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+
+def main()
+    print_int(factorial(5))
+end

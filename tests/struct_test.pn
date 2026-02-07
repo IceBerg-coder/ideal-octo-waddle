@@ -1,0 +1,17 @@
+extern def print_int(v: int)
+
+struct Point
+  x: int
+  y: int
+end
+
+var p: Point
+p.x = 10
+p.y = 20
+
+print_int(p.x)
+print_int(p.y)
+
+var p2: Point
+p2.x = p.x + 5
+print_int(p2.x)

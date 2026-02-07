@@ -1,0 +1,12 @@
+extern def print_int(val: int)
+
+def count_down(n: int)
+    while n > 0
+        print_int(n)
+        n = n - 1
+    end
+end
+
+def main()
+    count_down(5)
+end

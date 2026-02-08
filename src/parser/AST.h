@@ -20,6 +20,7 @@ struct ReturnStmt;
 struct Block;
 struct IfStmt;
 struct WhileStmt;
+struct ForStmt;
 struct FunctionStmt;
 struct VarDeclStmt;
 struct StructDeclStmt;
@@ -39,6 +40,7 @@ public:
     virtual void visit(Block& stmt) = 0;
     virtual void visit(IfStmt& stmt) = 0;
     virtual void visit(WhileStmt& stmt) = 0;
+    virtual void visit(ForStmt& stmt) = 0;
     virtual void visit(FunctionStmt& stmt) = 0;
     virtual void visit(VarDeclStmt& stmt) = 0;
     virtual void visit(StructDeclStmt& stmt) = 0;
@@ -235,10 +237,29 @@ struct WhileStmt : public Stmt {
     void accept(ASTVisitor& visitor) override { visitor.visit(*this); }
 };
 
+struct ForStmt : public Stmt {
+    std::string variable; // The name of the loop variable
+    std::unique_ptr<Expr> iterator; // The array/range/iterable expression
+    std::unique_ptr<Block> body;
+
+    ForStmt(std::string variable, std::unique_ptr<Expr> iterator, std::unique_ptr<Block> body)
+        : variable(std::move(variable)), iterator(std::move(iterator)), body(std::move(body)) {}
+
+    void print(int indent) const override {
+        std::cout << std::string(indent, ' ') << "ForStmt (" << variable << ")\n";
+        std::cout << std::string(indent + 2, ' ') << "In:\n";
+        iterator->print(indent + 4);
+        std::cout << std::string(indent + 2, ' ') << "Body:\n";
+        body->print(indent + 4);
+    }
+    void accept(ASTVisitor& visitor) override { visitor.visit(*this); }
+};
+
 struct VarDeclStmt : public Stmt {
     std::string name;
     std::string typeName; // optional
     std::unique_ptr<Expr> initializer;
+    std::shared_ptr<Type> type; // Populated by Sema
 
     VarDeclStmt(std::string name, std::string typeName, std::unique_ptr<Expr> init)
         : name(std::move(name)), typeName(std::move(typeName)), initializer(std::move(init)) {}

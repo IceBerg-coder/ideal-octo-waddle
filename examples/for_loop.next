@@ -1,0 +1,8 @@
+extern def print_int(val: int)
+
+def main()
+    var arr: int[] = [10, 20, 30]
+    for x in arr
+        print_int(x)
+    end
+end

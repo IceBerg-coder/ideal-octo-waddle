@@ -127,6 +127,30 @@ void TypeChecker::visit(WhileStmt& stmt) {
     stmt.body->accept(*this);
 }
 
+void TypeChecker::visit(ForStmt& stmt) {
+    stmt.iterator->accept(*this);
+    
+    // Check if iterator is Array
+    auto arrType = std::dynamic_pointer_cast<ArrayType>(stmt.iterator->type);
+    if (!arrType) {
+        std::cerr << "Type Error: For loop iterator must be an array\n";
+    }
+    
+    // Scope Logic (Simple Snapshot)
+    auto oldTable = symbolTable;
+    
+    // Define variable
+    if (arrType) {
+        symbolTable[stmt.variable] = arrType->elementType;
+    } else {
+        symbolTable[stmt.variable] = std::make_shared<VoidType>();
+    }
+    
+    stmt.body->accept(*this);
+    
+    symbolTable = oldTable;
+}
+
 void TypeChecker::visit(FunctionStmt& stmt) {
     // 1. Register Function in Symbol Table (Global)
     std::vector<std::shared_ptr<Type>> paramTypes;
@@ -179,6 +203,7 @@ void TypeChecker::visit(VarDeclStmt& stmt) {
         }
     }
     
+    stmt.type = type; // Store for CodeGen
     symbolTable[stmt.name] = type;
 }
 

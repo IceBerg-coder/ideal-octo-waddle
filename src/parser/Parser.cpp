@@ -152,6 +152,15 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         consume(TokenKind::End, "Expected 'end' after while");
         return std::make_unique<WhileStmt>(std::move(condition), std::move(body));
     }
+
+    if (match(TokenKind::For)) {
+        std::string name = std::string(consume(TokenKind::Identifier, "Expected variable name after 'for'").text);
+        consume(TokenKind::In, "Expected 'in' after variable in for-loop");
+        auto iterator = parseExpression();
+        auto body = parseBlock();
+        consume(TokenKind::End, "Expected 'end' after for loop");
+        return std::make_unique<ForStmt>(name, std::move(iterator), std::move(body));
+    }
     
     if (match(TokenKind::Var)) {
         std::string name = std::string(consume(TokenKind::Identifier, "Expected variable name").text);

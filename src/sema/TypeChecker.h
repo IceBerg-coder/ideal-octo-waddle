@@ -22,6 +22,7 @@ public:
     void visit(Block& stmt) override;
     void visit(IfStmt& stmt) override;
     void visit(WhileStmt& stmt) override;
+    void visit(ForStmt& stmt) override;
     void visit(FunctionStmt& stmt) override;
     void visit(VarDeclStmt& stmt) override;
     void visit(StructDeclStmt& stmt) override;

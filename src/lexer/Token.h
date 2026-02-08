@@ -30,6 +30,8 @@ enum class TokenKind {
     Struct,
     Extern,
     While,
+    For,
+    In,
     True,
     False,
     

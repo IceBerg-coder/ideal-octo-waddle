@@ -60,6 +60,8 @@ Token Lexer::identifier() {
     if (text == "struct") return atom(TokenKind::Struct);
     if (text == "extern") return atom(TokenKind::Extern);
     if (text == "while") return atom(TokenKind::While);
+    if (text == "for") return atom(TokenKind::For);
+    if (text == "in") return atom(TokenKind::In);
     if (text == "true") return atom(TokenKind::True);
     if (text == "false") return atom(TokenKind::False);
 

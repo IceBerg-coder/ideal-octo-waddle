@@ -31,6 +31,7 @@ public:
     void visit(Block& stmt) override;
     void visit(IfStmt& stmt) override;
     void visit(WhileStmt& stmt) override;
+    void visit(ForStmt& stmt) override;
     void visit(FunctionStmt& stmt) override;
     void visit(VarDeclStmt& stmt) override;
     void visit(StructDeclStmt& stmt) override;
@@ -50,6 +51,11 @@ private:
     std::map<std::string, llvm::StructType*> structTypes;
     std::map<std::string, std::map<std::string, int>> structFieldIndices;
     llvm::Value* lastValue = nullptr;
+    
+    // Memory Management
+    // Stack of scopes. Each scope contains list of variables (alloca pointers) to cleanup.
+    // Pair: <AllocaInst*, isArray>
+    std::vector<std::vector<std::pair<llvm::Value*, bool>>> scopeStack; 
 
     // Helpers
     llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* fun, const std::string& varName, llvm::Type* type);

@@ -4,6 +4,8 @@
 namespace pynext {
 
 void CodeGen::generate(const std::vector<std::unique_ptr<Stmt>>& stmts) {
+    scopeStack.push_back({}); // Global Scope
+
     // Check for user-defined main
     bool hasUserMain = false;
     for (const auto& s : stmts) {
@@ -162,16 +164,89 @@ void CodeGen::visit(CallExpr& expr) {
 void CodeGen::visit(ReturnStmt& stmt) {
     if (stmt.value) {
         stmt.value->accept(*this);
-        builder.CreateRet(lastValue);
+    }
+    llvm::Value* retVal = lastValue; // nullable
+    
+    // Identify if we are returning a cleanup-tracked variable
+    // If so, we must NOT free it (Move semantics)
+    llvm::Value* returnedAlloca = nullptr;
+    if (stmt.value) {
+        if (auto varExpr = dynamic_cast<VariableExpr*>(stmt.value.get())) {
+             if (namedValues.count(varExpr->name)) {
+                 returnedAlloca = namedValues[varExpr->name];
+             }
+        }
+    }
+
+    // Cleanup all scopes from top to function-level (excluding Global which is index 0)
+    // We assume 0 is global.
+    for (int i = scopeStack.size() - 1; i >= 1; --i) {
+        auto& cleanupList = scopeStack[i];
+        for (auto& item : cleanupList) {
+            llvm::Value* allocaInst = item.first;
+            bool isArray = item.second;
+            
+            // Skip if this is the variable being returned
+            if (allocaInst == returnedAlloca) continue;
+            
+            if (isArray) {
+                llvm::Value* dataPtr = builder.CreateLoad(llvm::PointerType::get(context, 0), allocaInst);
+                // Free(ptr - 8)
+                llvm::Value* neg8 = llvm::ConstantInt::get(context, llvm::APInt(64, -8, true));
+                llvm::Value* rawPtr = builder.CreateGEP(llvm::Type::getInt8Ty(context), dataPtr, neg8, "rawPtr");
+                
+                llvm::Function* freeFunc = module->getFunction("free");
+                if (!freeFunc) {
+                    std::vector<llvm::Type*> args = { llvm::PointerType::get(context, 0) };
+                    llvm::FunctionType* ft = llvm::FunctionType::get(llvm::Type::getVoidTy(context), args, false);
+                    freeFunc = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "free", module.get());
+                }
+                builder.CreateCall(freeFunc, {rawPtr});
+            }
+        }
+    }
+
+    if (retVal) {
+        builder.CreateRet(retVal);
     } else {
         builder.CreateRetVoid();
     }
 }
 
 void CodeGen::visit(Block& stmt) {
+    scopeStack.push_back({});
     for (const auto& s : stmt.statements) {
         s->accept(*this);
     }
+    
+    // Cleanup Scope
+    auto& cleanupList = scopeStack.back();
+    for (auto& item : cleanupList) {
+        llvm::Value* allocaInst = item.first;
+        bool isArray = item.second;
+        
+        if (isArray) {
+            // Load the pointer from alloca
+            llvm::Value* dataPtr = builder.CreateLoad(llvm::PointerType::get(context, 0), allocaInst);
+            
+            // Check if null (optional, safety)
+            // For now assume non-null if initialized.
+            
+            // The pointer points to Data (+8). We need Free(-8).
+            llvm::Value* neg8 = llvm::ConstantInt::get(context, llvm::APInt(64, -8, true));
+            llvm::Value* rawPtr = builder.CreateGEP(llvm::Type::getInt8Ty(context), dataPtr, neg8, "rawPtr");
+            
+            // Call free(rawPtr)
+            llvm::Function* freeFunc = module->getFunction("free");
+            if (!freeFunc) {
+                std::vector<llvm::Type*> args = { llvm::PointerType::get(context, 0) };
+                llvm::FunctionType* ft = llvm::FunctionType::get(llvm::Type::getVoidTy(context), args, false);
+                freeFunc = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "free", module.get());
+            }
+            builder.CreateCall(freeFunc, {rawPtr});
+        }
+    }
+    scopeStack.pop_back();
 }
 
 void CodeGen::visit(IfStmt& stmt) {
@@ -257,6 +332,85 @@ void CodeGen::visit(WhileStmt& stmt) {
     builder.SetInsertPoint(afterBB);
 }
 
+void CodeGen::visit(ForStmt& stmt) {
+    llvm::Function* func = builder.GetInsertBlock()->getParent();
+
+    // 1. Evaluate Array
+    stmt.iterator->accept(*this);
+    llvm::Value* arrayPtr = lastValue;
+    if (!arrayPtr) return;
+
+    // 2. Get Size (stored at -8 bytes)
+    llvm::Value* arrayPtrI8 = builder.CreateBitCast(arrayPtr, llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0));
+    llvm::Value* neg8 = llvm::ConstantInt::get(context, llvm::APInt(64, -8, true));
+    llvm::Value* sizePtrI8 = builder.CreateGEP(llvm::Type::getInt8Ty(context), arrayPtrI8, neg8, "sizePtrI8");
+    llvm::Value* sizePtr = builder.CreateBitCast(sizePtrI8, llvm::PointerType::get(llvm::Type::getInt64Ty(context), 0));
+    llvm::Value* sizeVal = builder.CreateLoad(llvm::Type::getInt64Ty(context), sizePtr, "arraysize");
+
+    // 3. Loop Setup
+    llvm::BasicBlock* condBB = llvm::BasicBlock::Create(context, "forcond", func);
+    llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(context, "forbody");
+    llvm::BasicBlock* incrBB = llvm::BasicBlock::Create(context, "forincr");
+    llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(context, "afterfor");
+
+    llvm::AllocaInst* idxAlloca = createEntryBlockAlloca(func, "idx", llvm::Type::getInt64Ty(context));
+    builder.CreateStore(llvm::ConstantInt::get(context, llvm::APInt(64, 0)), idxAlloca);
+
+    builder.CreateBr(condBB);
+
+    // 4. Condition
+    builder.SetInsertPoint(condBB);
+    llvm::Value* currIdx = builder.CreateLoad(llvm::Type::getInt64Ty(context), idxAlloca, "curridx");
+    llvm::Value* cond = builder.CreateICmpSLT(currIdx, sizeVal, "loopcond");
+    builder.CreateCondBr(cond, bodyBB, afterBB);
+
+    // 5. Body
+    func->insert(func->end(), bodyBB);
+    builder.SetInsertPoint(bodyBB);
+
+    // Get Element Type
+    llvm::Type* elemType = llvm::Type::getInt64Ty(context); 
+    if (auto arrT = std::dynamic_pointer_cast<pynext::ArrayType>(stmt.iterator->type)) {
+         auto et = arrT->elementType;
+         if (et->kind == TypeKind::Int) elemType = llvm::Type::getInt64Ty(context);
+         else if (et->kind == TypeKind::Float) elemType = llvm::Type::getDoubleTy(context);
+         else if (et->kind == TypeKind::Bool) elemType = llvm::Type::getInt1Ty(context);
+         else if (auto st = std::dynamic_pointer_cast<pynext::StructType>(et)) {
+             if (structTypes.count(st->name)) elemType = structTypes[st->name];
+         }
+    }
+
+    llvm::Value* elemAddr = builder.CreateGEP(elemType, arrayPtr, currIdx, "elemaddr");
+    llvm::Value* elemVal = builder.CreateLoad(elemType, elemAddr, "elemval");
+
+    llvm::AllocaInst* varAlloca = createEntryBlockAlloca(func, stmt.variable, elemType);
+    builder.CreateStore(elemVal, varAlloca);
+
+    llvm::AllocaInst* oldVal = namedValues[stmt.variable];
+    namedValues[stmt.variable] = varAlloca;
+
+    stmt.body->accept(*this);
+
+    if (oldVal) namedValues[stmt.variable] = oldVal;
+    else namedValues.erase(stmt.variable);
+
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateBr(incrBB);
+    }
+
+    // 6. Increment
+    func->insert(func->end(), incrBB);
+    builder.SetInsertPoint(incrBB);
+    llvm::Value* tmpIdx = builder.CreateLoad(llvm::Type::getInt64Ty(context), idxAlloca);
+    llvm::Value* nextIdx = builder.CreateAdd(tmpIdx, llvm::ConstantInt::get(context, llvm::APInt(64, 1)), "nextidx");
+    builder.CreateStore(nextIdx, idxAlloca);
+    builder.CreateBr(condBB);
+
+    // 7. After
+    func->insert(func->end(), afterBB);
+    builder.SetInsertPoint(afterBB);
+}
+
 void CodeGen::visit(VarDeclStmt& stmt) {
     llvm::Function* func = builder.GetInsertBlock()->getParent();
     
@@ -288,6 +442,16 @@ void CodeGen::visit(VarDeclStmt& stmt) {
     
     // 3. Register info
     namedValues[stmt.name] = alloca;
+    
+    // Register for cleanup in current scope if Array
+    bool isArray = false;
+    if (stmt.type && stmt.type->kind == TypeKind::Array) {
+        isArray = true;
+    }
+    
+    if (isArray && !scopeStack.empty()) {
+        scopeStack.back().push_back({alloca, isArray});
+    }
 }
 
 void CodeGen::visit(ExprStmt& stmt) {
@@ -480,14 +644,21 @@ void CodeGen::visit(ArrayLiteralExpr& expr) {
     // Size required?
     llvm::DataLayout dl(module.get());
     uint64_t typeSize = dl.getTypeAllocSize(elemType);
-    uint64_t totalSize = typeSize * size;
+    uint64_t totalSize = typeSize * size + 8; // Extra 8 bytes for size header
     
     llvm::Value* sizeVal = llvm::ConstantInt::get(context, llvm::APInt(64, totalSize));
     llvm::Value* voidPtr = builder.CreateCall(mallocFunc, {sizeVal}, "malloccall");
     
-    // Cast to T*
-    llvm::Value* arrayPtr = voidPtr; // Opaque pointers in LLVM 18 don't need cast? 
-    // Actually GEP needs correct type.
+    // Store Size at beginning
+    llvm::Value* sizePtr = voidPtr; // i8*
+    llvm::Value* sizeStoreVal = llvm::ConstantInt::get(context, llvm::APInt(64, size));
+    // sizePtr is i8*, need to cast to i64* to store size
+    // Using llvm 18 opaque pointers, we just specify type in Store
+    builder.CreateStore(sizeStoreVal, builder.CreateBitCast(sizePtr, llvm::PointerType::get(llvm::Type::getInt64Ty(context), 0)));
+
+    // Adjust arrayPtr to point after size
+    llvm::Value* offset = llvm::ConstantInt::get(context, llvm::APInt(64, 8));
+    llvm::Value* arrayPtr = builder.CreateGEP(llvm::Type::getInt8Ty(context), voidPtr, offset, "arraydata");
     
     // 3. Store elements
     for (int i=0; i < size; ++i) {

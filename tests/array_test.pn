@@ -1,0 +1,9 @@
+extern def print_int(v: int)
+
+var a: int[] = [10, 20, 30]
+print_int(a[0])
+print_int(a[1])
+
+a[1] = 50
+print_int(a[1])
+print_int(a[2])

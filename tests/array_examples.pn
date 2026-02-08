@@ -1,0 +1,25 @@
+extern def print_int(v: int)
+
+# Simple Array
+var arr: int[] = [1, 2, 3]
+print_int(arr[1]) # 2
+arr[1] = 42
+print_int(arr[1]) # 42
+
+# Struct Array
+struct Point
+  x: int
+  y: int
+end
+
+var p1: Point
+p1.x = 10
+p1.y = 20
+var p2: Point
+p2.x = 30
+p2.y = 40
+
+var points: Point[] = [p1, p2]
+print_int(points[0].x) # 10
+points[1].y = 100
+print_int(points[1].y) # 100

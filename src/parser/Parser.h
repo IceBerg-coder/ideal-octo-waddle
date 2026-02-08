@@ -40,6 +40,8 @@ private:
     std::unique_ptr<Expr> parsePrimary();
     std::unique_ptr<Expr> parseBinary(int precedence, std::unique_ptr<Expr> lhs);
     
+    std::string parseTypeName();
+    
     int getPrecedence(TokenKind kind);
 };
 

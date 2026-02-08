@@ -46,6 +46,8 @@ enum class TokenKind {
     // Punctuation
     LParen,         // (
     RParen,         // )
+    LBracket,       // [
+    RBracket,       // ]
     Comma,          // ,
     Colon,          // :
     Dot,            // .

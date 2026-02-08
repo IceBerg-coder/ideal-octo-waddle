@@ -36,6 +36,25 @@ llvm::Type* CodeGen::getType(const std::string& typeName) {
     if (typeName == "bool") return llvm::Type::getInt1Ty(context);
     if (typeName == "string") return llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
     if (typeName == "void") return llvm::Type::getVoidTy(context);
+    
+    // Check for array syntax
+    if (typeName.length() > 2 && typeName.substr(typeName.length() - 2) == "[]") {
+         std::string elemName = typeName.substr(0, typeName.length() - 2);
+         llvm::Type* elemType = getType(elemName);
+         // Array representation: Pointer to array struct { size, elements* }? 
+         // Or C-style raw pointer?
+         // Let's do raw pointer for simpler interop for now, as step 1.
+         // Or better: { i64 size, T* elements }
+         
+         // IMPLEMENTATION CHOICE:
+         // To support `arr[i]`, we need to know the stride.
+         // If we just use T*, LLVM handles stride.
+         // But we loose size safety.
+         
+         // Let's use T* for now (Unsafe/Simple)
+         return llvm::PointerType::get(elemType, 0); 
+    }
+
     if (structTypes.count(typeName)) return structTypes[typeName];
     return llvm::Type::getInt64Ty(context); // Default
 }
@@ -396,6 +415,93 @@ void CodeGen::visit(MemberAccessExpr& expr) {
     lastValue = builder.CreateLoad(loadType, addr, "memberload");
 }
 
+void CodeGen::visit(IndexExpr& expr) {
+    // 1. Calculate Address
+    // This logic duplicates getLValueAddress mostly, but...
+    // Let's use getLValueAddress to get the pointer to the element.
+    // If we are reading, we load.
+    
+    llvm::Value* addr = getLValueAddress(&expr);
+    if (!addr) {
+        lastValue = nullptr;
+        return;
+    }
+    
+    // 2. Load
+    // We need the type.
+    llvm::Type* loadType = llvm::Type::getInt64Ty(context); // default
+    if (expr.type) {
+         if (expr.type->kind == TypeKind::Int) loadType = llvm::Type::getInt64Ty(context);
+         else if (expr.type->kind == TypeKind::Float) loadType = llvm::Type::getDoubleTy(context);
+         else if (expr.type->kind == TypeKind::Bool) loadType = llvm::Type::getInt1Ty(context);
+         else if (auto st = std::dynamic_pointer_cast<pynext::StructType>(expr.type)) {
+             if (structTypes.count(st->name)) loadType = structTypes[st->name];
+         }
+    }
+    
+    lastValue = builder.CreateLoad(loadType, addr, "indexload");
+}
+
+void CodeGen::visit(ArrayLiteralExpr& expr) {
+    // Create an Array on Heap? 
+    // Malloc (size * sizeof(element))
+    
+    int size = expr.elements.size();
+    
+    // 1. Determine element size/type
+    // Assume homogeneous based on first element or TypeChecker
+    llvm::Type* elemType = llvm::Type::getInt64Ty(context);
+    if (expr.type) {
+         auto arrT = std::dynamic_pointer_cast<pynext::ArrayType>(expr.type);
+         if (arrT && arrT->elementType) {
+             // Map Type... (Refactor this mapping!)
+             // Quick Mapping again:
+             auto et = arrT->elementType;
+             if (et->kind == TypeKind::Int) elemType = llvm::Type::getInt64Ty(context);
+             else if (et->kind == TypeKind::Float) elemType = llvm::Type::getDoubleTy(context);
+             else if (et->kind == TypeKind::Bool) elemType = llvm::Type::getInt1Ty(context);
+             else if (auto st = std::dynamic_pointer_cast<pynext::StructType>(et)) {
+                 if (structTypes.count(st->name)) elemType = structTypes[st->name];
+             }
+             // ...
+         }
+    }
+    
+    // 2. Malloc
+    // We need `malloc` declared.
+    llvm::Function* mallocFunc = module->getFunction("malloc");
+    if (!mallocFunc) {
+        // Declare malloc: i8* malloc(i64)
+        std::vector<llvm::Type*> args = { llvm::Type::getInt64Ty(context) };
+        llvm::FunctionType* ft = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), args, false);
+        mallocFunc = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "malloc", module.get());
+    }
+    
+    // Size required?
+    llvm::DataLayout dl(module.get());
+    uint64_t typeSize = dl.getTypeAllocSize(elemType);
+    uint64_t totalSize = typeSize * size;
+    
+    llvm::Value* sizeVal = llvm::ConstantInt::get(context, llvm::APInt(64, totalSize));
+    llvm::Value* voidPtr = builder.CreateCall(mallocFunc, {sizeVal}, "malloccall");
+    
+    // Cast to T*
+    llvm::Value* arrayPtr = voidPtr; // Opaque pointers in LLVM 18 don't need cast? 
+    // Actually GEP needs correct type.
+    
+    // 3. Store elements
+    for (int i=0; i < size; ++i) {
+        expr.elements[i]->accept(*this);
+        llvm::Value* val = lastValue;
+        
+        llvm::Value* idxVal = llvm::ConstantInt::get(context, llvm::APInt(64, i));
+        llvm::Value* gep = builder.CreateGEP(elemType, arrayPtr, idxVal, "initidx");
+        builder.CreateStore(val, gep);
+    }
+    
+    lastValue = arrayPtr;
+}
+
 llvm::Value* CodeGen::getLValueAddress(Expr* expr) {
     if (auto varFn = dynamic_cast<VariableExpr*>(expr)) {
         if (namedValues.count(varFn->name)) {
@@ -442,6 +548,57 @@ llvm::Value* CodeGen::getLValueAddress(Expr* expr) {
         };
         
         return builder.CreateGEP(st, base, indices, "memberaddr");
+    }
+    
+    if (auto idxExpr = dynamic_cast<IndexExpr*>(expr)) {
+        llvm::Value* base = getLValueAddress(idxExpr->object.get()); // Recursion? No, see below.
+        // Wait, getLValueAddress is for getting address of a VARIABLE.
+        // If we have `a[i]`, we want value of `a` (pointer), then GEP.
+        // But `a` is an LValue (VariableExpr). `getLValueAddress(a)` gives address of `a` (stack slot).
+        // If we Load `a`, we get the array pointer.
+        
+        // My previous logic:
+        // idxExpr->object->accept(*this);
+        // llvm::Value* arrayPtr = lastValue;
+        
+        // Let's verify this logic.
+        idxExpr->object->accept(*this);
+        llvm::Value* arrayPtr = lastValue;
+        
+        if (!arrayPtr) {
+            std::cerr << "CodeGen Error: Array base eval failed\n";
+            return nullptr;
+        }
+
+        idxExpr->index->accept(*this);
+        llvm::Value* indexVal = lastValue;
+        
+        if (!indexVal) {
+             std::cerr << "CodeGen Error: Index eval failed\n";
+             return nullptr;
+        }
+        
+        if (!idxExpr->object->type) {
+             std::cerr << "CodeGen Error: Array object has no type info\n";
+             return nullptr;
+        }
+
+        if (auto arrType = std::dynamic_pointer_cast<pynext::ArrayType>(idxExpr->object->type)) {
+             llvm::Type* elemLLVMType = nullptr;
+             auto et = arrType->elementType;
+             if (et->kind == TypeKind::Int) elemLLVMType = llvm::Type::getInt64Ty(context);
+             else if (et->kind == TypeKind::Float) elemLLVMType = llvm::Type::getDoubleTy(context);
+             else if (et->kind == TypeKind::Bool) elemLLVMType = llvm::Type::getInt1Ty(context);
+             else if (auto st = std::dynamic_pointer_cast<pynext::StructType>(et)) {
+                 if (structTypes.count(st->name)) elemLLVMType = structTypes[st->name];
+             }
+             
+             if (!elemLLVMType) elemLLVMType = llvm::Type::getInt64Ty(context); 
+             
+             return builder.CreateGEP(elemLLVMType, arrayPtr, indexVal, "indexaddr");
+        } else {
+             std::cerr << "CodeGen Error: Object type is not ArrayType: " << idxExpr->object->type->toString() << "\n";
+        }
     }
     
     return nullptr;

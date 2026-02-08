@@ -9,8 +9,13 @@ std::shared_ptr<Type> TypeChecker::resolveType(const std::string& name) {
     if (name == "string") return std::make_shared<StringType>();
     if (name == "void") return std::make_shared<VoidType>();
     
-    // Check struct defs
     if (structDefs.count(name)) return structDefs[name];
+    
+    // Array Types (e.g., int[], Point[][])
+    if (name.length() > 2 && name.substr(name.length() - 2) == "[]") {
+        std::string elemName = name.substr(0, name.length() - 2);
+        return std::make_shared<ArrayType>(resolveType(elemName));
+    }
     
     return std::make_shared<VoidType>(); // Default/Error
 }
@@ -45,10 +50,11 @@ void TypeChecker::visit(VariableExpr& expr) {
 void TypeChecker::visit(BinaryExpr& expr) {
     // Assignment Logic
     if (expr.op == "=") {
-        // LHS can be VariableExpr or MemberAccessExpr
+        // LHS can be VariableExpr or MemberAccessExpr or IndexExpr
         bool isValidLHS = false;
         if (dynamic_cast<VariableExpr*>(expr.left.get())) isValidLHS = true;
         else if (dynamic_cast<MemberAccessExpr*>(expr.left.get())) isValidLHS = true;
+        else if (dynamic_cast<IndexExpr*>(expr.left.get())) isValidLHS = true;
 
         if (!isValidLHS) {
             std::cerr << "Type Error: Assignment to non-lvalue\n";
@@ -214,6 +220,49 @@ void TypeChecker::visit(MemberAccessExpr& expr) {
 
 void TypeChecker::visit(ExprStmt& stmt) {
     stmt.expr->accept(*this);
+}
+
+void TypeChecker::visit(IndexExpr& expr) {
+    expr.object->accept(*this);
+    expr.index->accept(*this);
+    
+    // Check if object is array
+    auto arrType = std::dynamic_pointer_cast<ArrayType>(expr.object->type);
+    if (!arrType) {
+        std::cerr << "Type Error: Indexing non-array type\n";
+        expr.type = std::make_shared<VoidType>();
+        return;
+    }
+    
+    // Check if index is int
+    if (expr.index->type->kind != TypeKind::Int) {
+        std::cerr << "Type Error: Array index must be integer\n";
+    }
+    
+    expr.type = arrType->elementType;
+}
+
+void TypeChecker::visit(ArrayLiteralExpr& expr) {
+    if (expr.elements.empty()) {
+        // Empty array... type is Array<Void>? Or inferred later?
+        // Let's assume Void for now or Error.
+        // Actually, let's use a special "Any" or "Unknown" if we had it.
+        // For now: Array<Int> default?
+        expr.type = std::make_shared<ArrayType>(std::make_shared<IntType>()); 
+        return;
+    }
+    
+    // Check all elements are same type
+    expr.elements[0]->accept(*this);
+    auto firstType = expr.elements[0]->type;
+    
+    for (size_t i = 1; i < expr.elements.size(); ++i) {
+        expr.elements[i]->accept(*this);
+        // Strict equality check?
+        // TODO: implement strict type equality
+    }
+    
+    expr.type = std::make_shared<ArrayType>(firstType);
 }
 
 } // namespace pynext

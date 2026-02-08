@@ -124,6 +124,8 @@ Token Lexer::nextToken() {
         case '/': return atom(TokenKind::Slash);
         case '(': return atom(TokenKind::LParen);
         case ')': return atom(TokenKind::RParen);
+        case '[': return atom(TokenKind::LBracket);
+        case ']': return atom(TokenKind::RBracket);
         case ',': return atom(TokenKind::Comma);
         case ':': return atom(TokenKind::Colon);
         case '.': return atom(TokenKind::Dot);

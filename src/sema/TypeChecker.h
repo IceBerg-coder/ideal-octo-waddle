@@ -27,6 +27,8 @@ public:
     void visit(StructDeclStmt& stmt) override;
     void visit(ExprStmt& stmt) override;
     void visit(MemberAccessExpr& expr) override;
+    void visit(IndexExpr& expr) override;
+    void visit(ArrayLiteralExpr& expr) override;
 
 private:
     std::map<std::string, std::shared_ptr<Type>> symbolTable;

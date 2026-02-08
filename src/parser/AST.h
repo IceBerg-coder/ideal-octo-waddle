@@ -14,6 +14,8 @@ struct VariableExpr;
 struct BinaryExpr;
 struct CallExpr;
 struct MemberAccessExpr;
+struct IndexExpr;
+struct ArrayLiteralExpr;
 struct ReturnStmt;
 struct Block;
 struct IfStmt;
@@ -31,6 +33,8 @@ public:
     virtual void visit(BinaryExpr& expr) = 0;
     virtual void visit(CallExpr& expr) = 0;
     virtual void visit(MemberAccessExpr& expr) = 0;
+    virtual void visit(IndexExpr& expr) = 0;
+    virtual void visit(ArrayLiteralExpr& expr) = 0;
     virtual void visit(ReturnStmt& stmt) = 0;
     virtual void visit(Block& stmt) = 0;
     virtual void visit(IfStmt& stmt) = 0;
@@ -122,6 +126,37 @@ struct MemberAccessExpr : public Expr {
     void print(int indent) const override {
         std::cout << std::string(indent, ' ') << "MemberAccess: ." << member << "\n";
         object->print(indent + 2);
+    }
+    void accept(ASTVisitor& visitor) override { visitor.visit(*this); }
+};
+
+struct IndexExpr : public Expr {
+    std::unique_ptr<Expr> object;
+    std::unique_ptr<Expr> index;
+
+    IndexExpr(std::unique_ptr<Expr> object, std::unique_ptr<Expr> index)
+        : object(std::move(object)), index(std::move(index)) {}
+
+    void print(int indent) const override {
+        std::cout << std::string(indent, ' ') << "IndexExpr\n";
+        object->print(indent + 2);
+        std::cout << std::string(indent + 2, ' ') << "Index:\n";
+        index->print(indent + 4);
+    }
+    void accept(ASTVisitor& visitor) override { visitor.visit(*this); }
+};
+
+struct ArrayLiteralExpr : public Expr {
+    std::vector<std::unique_ptr<Expr>> elements;
+
+    ArrayLiteralExpr(std::vector<std::unique_ptr<Expr>> elements)
+        : elements(std::move(elements)) {}
+
+    void print(int indent) const override {
+        std::cout << std::string(indent, ' ') << "ArrayLiteral\n";
+        for (const auto& e : elements) {
+            e->print(indent + 2);
+        }
     }
     void accept(ASTVisitor& visitor) override { visitor.visit(*this); }
 };

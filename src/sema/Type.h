@@ -15,6 +15,7 @@ enum class TypeKind {
     Bool,
     String,
     Struct,
+    Array,
     Function,
     TypeVariable
 };
@@ -73,6 +74,16 @@ struct StructType : public Type {
         }
         return -1;
     }
+};
+
+struct ArrayType : public Type {
+    std::shared_ptr<Type> elementType;
+    int size; 
+    
+    explicit ArrayType(std::shared_ptr<Type> elementType, int size = 0) 
+        : Type(TypeKind::Array), elementType(std::move(elementType)), size(size) {}
+        
+    std::string toString() const override { return elementType->toString() + "[]"; }
 };
 
 struct FunctionType : public Type {

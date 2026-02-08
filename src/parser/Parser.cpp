@@ -49,7 +49,7 @@ std::unique_ptr<StructDeclStmt> Parser::parseStruct() {
     while (currentToken.kind != TokenKind::End && currentToken.kind != TokenKind::EndOfFile) {
         std::string fieldName = std::string(consume(TokenKind::Identifier, "Expected field name").text);
         consume(TokenKind::Colon, "Expected ':'");
-        std::string typeName = std::string(consume(TokenKind::Identifier, "Expected field type").text);
+        std::string typeName = parseTypeName();
         fields.push_back({fieldName, typeName});
     }
     consume(TokenKind::End, "Expected 'end' after struct body");
@@ -68,7 +68,7 @@ std::unique_ptr<FunctionStmt> Parser::parseExtern() {
         do {
             std::string paramName = std::string(consume(TokenKind::Identifier, "Expected parameter name").text);
             consume(TokenKind::Colon, "Expected ':' for type");
-            std::string typeName = std::string(consume(TokenKind::Identifier, "Expected type name").text);
+            std::string typeName = parseTypeName();
             params.push_back({paramName, typeName});
         } while (match(TokenKind::Comma));
     }
@@ -76,7 +76,7 @@ std::unique_ptr<FunctionStmt> Parser::parseExtern() {
 
     std::string returnType = "void";
     if (match(TokenKind::Arrow)) {
-        returnType = std::string(consume(TokenKind::Identifier, "Expected return type").text);
+        returnType = parseTypeName();
     }
     
     // Externs have no body
@@ -93,7 +93,7 @@ std::unique_ptr<FunctionStmt> Parser::parseFunction() {
         do {
             std::string paramName = std::string(consume(TokenKind::Identifier, "Expected parameter name").text);
             consume(TokenKind::Colon, "Expected ':' for type");
-            std::string typeName = std::string(consume(TokenKind::Identifier, "Expected type name").text);
+            std::string typeName = parseTypeName();
             params.push_back({paramName, typeName});
         } while (match(TokenKind::Comma));
     }
@@ -101,7 +101,7 @@ std::unique_ptr<FunctionStmt> Parser::parseFunction() {
     
     std::string returnType = "void";
     if (match(TokenKind::Arrow)) {
-        returnType = std::string(consume(TokenKind::Identifier, "Expected return type").text);
+        returnType = parseTypeName();
     }
     
     auto body = parseBlock();
@@ -158,7 +158,7 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         std::string typeName = "";
         
         if (match(TokenKind::Colon)) {
-            typeName = std::string(consume(TokenKind::Identifier, "Expected type name").text);
+            typeName = parseTypeName();
         }
         
         std::unique_ptr<Expr> init = nullptr;
@@ -219,6 +219,15 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         std::string val = std::string(currentToken.text);
         advance();
         lhs = std::make_unique<LiteralExpr>(val, false, false, true);
+    } else if (match(TokenKind::LBracket)) {
+        std::vector<std::unique_ptr<Expr>> elements;
+        if (currentToken.kind != TokenKind::RBracket) {
+            do {
+                elements.push_back(parseExpression());
+            } while (match(TokenKind::Comma));
+        }
+        consume(TokenKind::RBracket, "Expected ']'");
+        lhs = std::make_unique<ArrayLiteralExpr>(std::move(elements));
     } else if (match(TokenKind::LParen)) {
         lhs = parseExpression();
         consume(TokenKind::RParen, "Expected ')'");
@@ -227,10 +236,18 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         exit(1);
     }
     
-    // Handle Member Access (dot)
-    while (match(TokenKind::Dot)) {
-        std::string member = std::string(consume(TokenKind::Identifier, "Expected member name after '.'").text);
-        lhs = std::make_unique<MemberAccessExpr>(std::move(lhs), member);
+    // Handle Postfix Expressions (Member Access, Indexing)
+    while (true) {
+        if (match(TokenKind::Dot)) {
+            std::string member = std::string(consume(TokenKind::Identifier, "Expected member name after '.'").text);
+            lhs = std::make_unique<MemberAccessExpr>(std::move(lhs), member);
+        } else if (match(TokenKind::LBracket)) {
+            auto index = parseExpression();
+            consume(TokenKind::RBracket, "Expected ']' after index");
+            lhs = std::make_unique<IndexExpr>(std::move(lhs), std::move(index));
+        } else {
+            break;
+        }
     }
     
     return lhs;
@@ -269,4 +286,14 @@ std::unique_ptr<Expr> Parser::parseBinary(int exprPrec, std::unique_ptr<Expr> lh
     }
 }
 
+std::string Parser::parseTypeName() {
+    std::string type = std::string(consume(TokenKind::Identifier, "Expected type name").text);
+    while (match(TokenKind::LBracket)) {
+        consume(TokenKind::RBracket, "Expected ']' after '[' in type name");
+        type += "[]";
+    }
+    return type;
+}
+
 } // namespace pynext
+
